@@ -10,17 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Make "python" exist
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-# Upgrade pip tooling (helps wheel resolution)
+# Better wheel/install behavior in CI
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install deps first (keeps model-download layer cacheable)
+# Install deps first (keeps download layer cacheable)
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # ---- Download voice at build time ----
-# Change this at build time: --build-arg PIPER_VOICE=en_US-lessac-medium
 ARG PIPER_VOICE=en_US-amy-low
-RUN python -m piper.download_voices "${PIPER_VOICE}" --output-dir /models \
+RUN mkdir -p /models \
+ && python -m piper.download_voices "${PIPER_VOICE}" --download-dir /models \
  && ls -lah /models
 
 # App last (so code changes don't invalidate model download layer)
