@@ -1,0 +1,19 @@
+services:
+  piper-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      PIPER_MODEL: /models/en_US-amy-low.onnx
+      PIPER_USE_CUDA: "0"
+      MAX_INFLIGHT_PER_WORKER: "16"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
