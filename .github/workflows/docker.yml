@@ -35,7 +35,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/reldnahc/ai-jeopardy-piper-api:latest
+            ghcr.io/reldnahc/ai-jeopardy-piper-api:${{ github.sha }}
           build-args: |
             PIPER_VOICE=en_US-amy-low
