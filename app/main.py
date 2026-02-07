@@ -2,7 +2,6 @@ import io
 import os
 import wave
 import asyncio
-import time
 import onnxruntime as ort
 
 from fastapi import FastAPI, HTTPException, Response
@@ -27,16 +26,6 @@ USE_CUDA = os.getenv("PIPER_USE_CUDA", "0") == "1"
 app = FastAPI(title="Piper Python API", version="1.0")
 
 voice: PiperVoice | None = None
-
-# ---- simple in-process metrics (per worker) ----
-_metrics = {
-    "requests_total": 0,
-    "errors_total": 0,
-    "tts_synth_seconds_sum": 0.0,
-    "tts_total_seconds_sum": 0.0,
-    "tts_queue_wait_seconds_sum": 0.0,
-    "bytes_total": 0,
-}
 
 
 class TtsRequest(BaseModel):
@@ -65,42 +54,21 @@ def health():
     }
 
 
-def synth_to_wav_bytes_timed(text: str, syn_config: SynthesisConfig | None) -> tuple[bytes, float]:
+def synth_to_wav_bytes(text: str, syn_config: SynthesisConfig | None) -> bytes:
     if voice is None:
         raise RuntimeError("voice not loaded")
 
-    start = time.perf_counter()
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
         voice.synthesize_wav(text, wav_file, syn_config=syn_config)
-    synth_s = time.perf_counter() - start
-    return buf.getvalue(), synth_s
 
-
-@app.get("/metrics")
-def metrics():
-    lines = []
-    lines.append("# TYPE piper_requests_total counter")
-    lines.append(f"piper_requests_total {_metrics['requests_total']}")
-    lines.append("# TYPE piper_errors_total counter")
-    lines.append(f"piper_errors_total {_metrics['errors_total']}")
-    lines.append("# TYPE piper_tts_synth_seconds_sum counter")
-    lines.append(f"piper_tts_synth_seconds_sum {_metrics['tts_synth_seconds_sum']}")
-    lines.append("# TYPE piper_tts_total_seconds_sum counter")
-    lines.append(f"piper_tts_total_seconds_sum {_metrics['tts_total_seconds_sum']}")
-    lines.append("# TYPE piper_tts_queue_wait_seconds_sum counter")
-    lines.append(f"piper_tts_queue_wait_seconds_sum {_metrics['tts_queue_wait_seconds_sum']}")
-    lines.append("# TYPE piper_bytes_total counter")
-    lines.append(f"piper_bytes_total {_metrics['bytes_total']}")
-    return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+    return buf.getvalue()
 
 
 @app.post("/tts")
 async def tts(req: TtsRequest):
     if voice is None:
         raise HTTPException(status_code=500, detail="Voice not loaded")
-
-    _metrics["requests_total"] += 1
 
     syn_config = SynthesisConfig(
         volume=req.volume if req.volume is not None else DEFAULT_VOLUME,
@@ -110,33 +78,17 @@ async def tts(req: TtsRequest):
         normalize_audio=req.normalize_audio if req.normalize_audio is not None else True,
     )
 
-    total_start = time.perf_counter()
-
-    # Measure how long we wait for a concurrency slot
-    wait_start = time.perf_counter()
     async with _sem:
-        queue_wait_s = time.perf_counter() - wait_start
-
         try:
-            audio, synth_s = await asyncio.to_thread(synth_to_wav_bytes_timed, req.text, syn_config)
+            audio = await asyncio.to_thread(
+                synth_to_wav_bytes,
+                req.text,
+                syn_config
+            )
         except Exception as e:
-            _metrics["errors_total"] += 1
             raise HTTPException(status_code=500, detail=str(e))
 
-    total_s = time.perf_counter() - total_start
-
-    # Update metrics
-    _metrics["tts_synth_seconds_sum"] += synth_s
-    _metrics["tts_total_seconds_sum"] += total_s
-    _metrics["tts_queue_wait_seconds_sum"] += queue_wait_s
-    _metrics["bytes_total"] += len(audio)
-
-    # Put the timings in headers (clear units)
-    headers = {
-        "X-TTS-Total-ms": f"{total_s * 1000:.2f}",
-        "X-TTS-QueueWait-ms": f"{queue_wait_s * 1000:.2f}",
-        "X-TTS-Synth-ms": f"{synth_s * 1000:.2f}",
-        "X-TTS-Bytes": str(len(audio)),
-    }
-
-    return Response(content=audio, media_type="audio/wav", headers=headers)
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+    )

@@ -22,3 +22,5 @@ models/
 
 .env
 
+/body.json
+/test.wav
